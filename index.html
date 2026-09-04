@@ -125,6 +125,8 @@
         <span class="custom-range" id="customRange">
           <input type="date" id="customStart"> <span style="color:var(--text-muted)">→</span> <input type="date" id="customEnd">
         </span>
+        <div class="fb-label" style="margin-top:.4rem;">Mes específico</div>
+        <div id="monthPresets" style="display:flex;flex-direction:column;gap:.35rem;"></div>
       </div>
     </div>
     <label class="compare-check"><input type="checkbox" id="compareToggle"> Comparar con período anterior</label>
@@ -194,9 +196,12 @@ const TAB_ADS_RESUMEN = 'Resumen mensual';
 
 // Dominios de correo personal -> NO cuentan como MQL. Ajustable a futuro.
 const PERSONAL_EMAIL_DOMAINS = new Set([
-  'gmail.com','hotmail.com','hotmail.es','hotmail.com.mx','outlook.com','outlook.es',
+  'gmail.com','hotmail.com','hotmail.es','hotmail.com.mx','outlook.com','outlook.es','outlook.com.mx',
   'live.com','live.com.mx','yahoo.com','yahoo.com.mx','yahoo.es','icloud.com','me.com',
-  'msn.com','aol.com','protonmail.com','gmx.com'
+  'msn.com','aol.com','protonmail.com','gmx.com',
+  // Dominio interno de la agencia -> nunca cuenta como MQL (leads de prueba internos).
+  // Ajusta aquí si el dominio real es distinto (ej. rockinmedia.mx en vez de .com).
+  'rockinmedia.com','rockinmedia.mx'
 ]);
 
 const MES_ES = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
@@ -256,17 +261,12 @@ async function fetchAdsResumenMensualRaw(sheetId, sheetName){
   const cellText = (row, idx) => { const c = row && row.c ? row.c[idx] : null; if(!c) return ''; return (c.v ?? c.f ?? '').toString().trim(); };
   const now = new Date();
   const out = [];
-  // Filas índice 3..14 (0-based) = Enero..Diciembre. Bloque 2025 = cols B..H (1..7),
-  // bloque 2026 = cols J..P (9..15). Ver SKILL.md / notas de este proyecto.
+  // Filas índice 3..14 (0-based) = Enero..Diciembre. Sólo bloque 2026 = cols J..P (9..15).
+  // El bloque 2025 (cols B..H) se ignora a propósito: el cliente pidió no incluirlo
+  // porque hace que las gráficas se vean menos legibles. Ver SKILL.md / notas del proyecto.
   for(let i=3; i<=14; i++){
     const row = rows[i];
     if(!row) continue;
-    const mes2025 = cellText(row,2);
-    const idx2025 = MES_ES_LARGO.findIndex(m => m.toLowerCase() === mes2025.toLowerCase());
-    if(idx2025 >= 0){
-      const fecha = new Date(2025, idx2025, 1);
-      if(fecha <= now) out.push({ fecha, spend: cellNum(row,5), googleLeads: cellNum(row,6), impressions: cellNum(row,3), clicks: cellNum(row,4) });
-    }
     const mes2026 = cellText(row,10);
     const idx2026 = MES_ES_LARGO.findIndex(m => m.toLowerCase() === mes2026.toLowerCase());
     if(idx2026 >= 0){
@@ -398,7 +398,15 @@ function resolveRange(){
     case 'custom':
       start = parseLocalDateInput(filters.customStart) || new Date(2000,0,1);
       end = parseLocalDateInput(filters.customEnd) || new Date(today); break;
-    default: start = new Date(2000,0,1); end = new Date(today); break; // 'all'
+    default:
+      if(filters.preset && filters.preset.startsWith('month:')){
+        const [y,m] = filters.preset.slice(6).split('-').map(Number);
+        start = new Date(y, m-1, 1);
+        end = new Date(y, m, 0);
+      } else {
+        start = new Date(2000,0,1); end = new Date(today); // 'all'
+      }
+      break;
   }
   end.setHours(23,59,59,999);
   return {start, end};
@@ -410,6 +418,18 @@ function previousRange({start,end}){
 }
 function filterByRange(arr, range){ return arr.filter(x => x.fecha >= range.start && x.fecha <= range.end); }
 function isFineGrainedPreset(){ return ['today','yesterday','7','14','30'].includes(filters.preset); }
+
+/* Genera un botón por cada mes con datos reales (leads y/o gasto), usando la
+   columna "Mes" del Sheet de leads como fuente de verdad para los leads. */
+function renderMonthPresetButtons(){
+  const keys = new Set();
+  ALL_LEADS.forEach(l => keys.add(l.monthKey));
+  ALL_ADS.forEach(a => keys.add(monthKey(a.fecha)));
+  const sorted = Array.from(keys).sort();
+  document.getElementById('monthPresets').innerHTML = sorted.map(k =>
+    `<button class="preset-btn" data-preset="month:${k}">${monthLabel(k)}</button>`
+  ).join('');
+}
 
 function spendForRange(range){
   if(ADS_GRANULARITY === 'day'){
@@ -443,10 +463,15 @@ function processRawData(){
     const personal = isPersonalEmail(correo);
     const isMQL = correo !== '' && personal === false;
     const isSQL = empleados >= 400 || (empleados >= 200 && turnos >= 1);
+    // Preferimos la columna "Mes" (número 1-12) sobre el mes derivado de "Fecha":
+    // es más confiable y es la que el cliente pidió usar como filtro.
+    const mesCol = Number(n['mes']);
+    const monthIdx0 = (mesCol >= 1 && mesCol <= 12) ? (mesCol - 1) : fecha.getMonth();
+    const monthKeyLead = `${fecha.getFullYear()}-${String(monthIdx0+1).padStart(2,'0')}`;
     return {
       fecha, empresa: (n['empresa']||'').toString(), empleados, turnos,
       ciudad: (n['ciudad']||'').toString(), status: (n['status']||'').toString().trim(),
-      correo, isMQL, isSQL, hasEmail: correo !== ''
+      correo, isMQL, isSQL, hasEmail: correo !== '', monthKey: monthKeyLead
     };
   }).filter(l => l.fecha);
 
@@ -461,7 +486,7 @@ function buildMonthlyTable(){
     map[key].spend += a.spend;
   });
   ALL_LEADS.forEach(l=>{
-    const key = monthKey(l.fecha);
+    const key = l.monthKey;
     if(!map[key]) map[key] = { key, spend:0, leads:0, mql:0, sql:0 };
     map[key].leads += 1;
     if(l.isMQL) map[key].mql += 1;
@@ -669,6 +694,7 @@ async function init(){
     RAW.adsMonthly = adsData;
 
     processRawData();
+    renderMonthPresetButtons();
     document.getElementById('loadingBox').style.display = 'none';
     document.getElementById('dashboardBody').style.display = 'block';
     renderAll();
@@ -695,16 +721,19 @@ document.addEventListener('click', (e) => {
   const panel = document.getElementById('periodPanel'), toggle = document.getElementById('periodToggle');
   if(panel.classList.contains('show') && !panel.contains(e.target) && !toggle.contains(e.target)) panel.classList.remove('show');
 });
-document.querySelectorAll('.preset-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.preset-btn').forEach(b=>b.classList.remove('active'));
-    btn.classList.add('active');
-    filters.preset = btn.dataset.preset;
-    document.getElementById('periodToggle').innerHTML = btn.textContent + ' <span class="chev">▾</span>';
-    document.getElementById('customRange').classList.toggle('show', filters.preset==='custom');
-    if(filters.preset !== 'custom') document.getElementById('periodPanel').classList.remove('show');
-    renderAll();
-  });
+// Delegación de eventos en el panel completo: así funciona igual con los
+// botones fijos (Hoy, Ayer, etc.) y con los de mes que se generan dinámicamente
+// después de cargar los datos.
+document.getElementById('periodPanel').addEventListener('click', (e) => {
+  const btn = e.target.closest('.preset-btn');
+  if(!btn) return;
+  document.querySelectorAll('.preset-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  filters.preset = btn.dataset.preset;
+  document.getElementById('periodToggle').innerHTML = btn.textContent + ' <span class="chev">▾</span>';
+  document.getElementById('customRange').classList.toggle('show', filters.preset==='custom');
+  if(filters.preset !== 'custom') document.getElementById('periodPanel').classList.remove('show');
+  renderAll();
 });
 document.getElementById('customStart').addEventListener('change', e => { filters.customStart = e.target.value; if(filters.preset==='custom') renderAll(); });
 document.getElementById('customEnd').addEventListener('change', e => { filters.customEnd = e.target.value; if(filters.preset==='custom') renderAll(); });

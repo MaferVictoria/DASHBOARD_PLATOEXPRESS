@@ -35,7 +35,12 @@ Una vez puestas las variables y redeployado, el dashboard detecta automáticamen
 ## 3. Pendiente de tu lado: columna "Correo"
 Para que el cálculo de **MQL** funcione, agrega una columna llamada exactamente **"Correo"** en el Sheet "Plato - LEADS" (Hoja 1), con el correo de cada lead. Mientras un lead no tenga correo capturado, cuenta como Lead pero no como MQL (el dashboard lo marca como "pendiente", no como error).
 
-Dominios que **no** cuentan como correo de empresa (ajustable en el código, constante `PERSONAL_EMAIL_DOMAINS`): gmail, hotmail, outlook, live, yahoo, icloud, msn, aol, protonmail, gmx. Si falta alguno o hay que quitar uno, dímelo y lo ajusto.
+Dominios que **no** cuentan como correo de empresa (ajustable en el código, constante `PERSONAL_EMAIL_DOMAINS`): gmail, hotmail, outlook (incl. .com.mx), live, yahoo, icloud, msn, aol, protonmail, gmx, y el dominio interno de la agencia (`rockinmedia.com` / `rockinmedia.mx` — si el dominio real es otro, dímelo y lo corrijo). Si falta alguno más o hay que quitar uno, dímelo y lo ajusto.
+
+## 5. Otros detalles ya incorporados
+- El agrupamiento mensual de leads usa la columna **"Mes"** del Sheet (no la fecha), tal cual lo pediste.
+- El dashboard ahora tiene botones de "Mes específico" en el filtro de periodo (uno por cada mes con datos), además de los presets normales.
+- La pestaña "Resumen mensual" del Sheet de Google Ads ya sólo trae 2026 — se quitó 2025 a propósito para que las gráficas se lean mejor.
 
 ## 4. Fuentes de datos (IDs, por si algún día cambian de nombre)
 - Pipeline: Sheet `1QEZ_w30onOHOLN_VJ4pUt5e90LC9z4ZXILa5Qz7vrA8`, pestaña `Hoja 1`.
