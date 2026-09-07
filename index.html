@@ -136,6 +136,7 @@
 <div class="tabs-nav">
   <button class="tab-btn active" data-tab="resumen">📊 Resumen Ejecutivo</button>
   <button class="tab-btn" data-tab="leads">🧾 Detalle de Leads</button>
+  <button class="tab-btn" data-tab="plaza">🗺️ Por plaza</button>
 </div>
 
 <div id="loadingBox" class="loading"><div class="container"><div class="spinner"></div>Conectando con las fuentes de datos...</div></div>
@@ -161,8 +162,8 @@
       <div class="table-card">
         <table>
           <thead><tr>
-            <th>Mes</th><th>Gasto</th><th>Leads</th><th>MQL</th><th>SQL</th>
-            <th>CPA Lead</th><th>CPA MQL</th><th>CPA SQL</th>
+            <th>Mes</th><th>Gasto</th><th>Leads</th><th>MQL</th><th>Posible SQL</th><th>SQL</th>
+            <th>CPA Lead</th><th>CPA MQL</th><th>CPA Posible SQL</th><th>CPA SQL</th>
           </tr></thead>
           <tbody id="mainTableBody"></tbody>
         </table>
@@ -175,10 +176,33 @@
       <div class="table-card">
         <table>
           <thead><tr>
-            <th>Fecha</th><th>Empresa</th><th>Empleados</th><th>Turnos</th><th>Ciudad</th>
-            <th>Correo</th><th>MQL</th><th>SQL</th><th>Status</th>
+            <th>Fecha</th><th>Empresa</th><th>Empleados</th><th>Turnos</th><th>Plaza</th>
+            <th>Correo</th><th>MQL</th><th>Posible SQL</th><th>SQL</th><th>Status</th>
           </tr></thead>
           <tbody id="leadsTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div id="tab-plaza" class="tab-content">
+    <div class="container">
+      <div class="alert-banner" id="plazaAlertBanner"></div>
+      <div class="kpi-grid" id="kpiGridPlaza"></div>
+
+      <div class="chart-card">
+        <h3>Gastado vs. generado por plaza</h3>
+        <div class="chart-container"><canvas id="chartPlaza"></canvas></div>
+        <div class="chart-note">Usa el mismo filtro de periodo de arriba. La inversión viene de la pestaña "Resumen mensual por plaza" (sólo distingue Nuevo León vs. el resto), así que los leads de CDMX y Estado de México se agrupan juntos para poder comparar.</div>
+      </div>
+
+      <div class="table-card">
+        <table>
+          <thead><tr>
+            <th>Mes</th><th>Plaza</th><th>Gasto</th><th>Leads</th><th>MQL</th><th>Posible SQL</th><th>SQL</th>
+            <th>CPL</th><th>CPA MQL</th><th>CPA SQL</th>
+          </tr></thead>
+          <tbody id="plazaTableBody"></tbody>
         </table>
       </div>
     </div>
@@ -193,6 +217,9 @@ const SHEET_ID_LEADS = '1QEZ_w30onOHOLN_VJ4pUt5e90LC9z4ZXILa5Qz7vrA8';
 const TAB_LEADS = 'Hoja 1';
 const SHEET_ID_ADS = '1ToVcoGqYLd3PR6HghpyjQrVPCWEttkBbSxG2wKigwaI';
 const TAB_ADS_RESUMEN = 'Resumen mensual';
+const TAB_ADS_PLAZA = 'Resumen mensual por plaza';
+const PLAZA_NL = 'Nuevo León';
+const PLAZA_CDMX_EDOMEX = 'CDMX y Estado de México';
 
 // Dominios de correo personal -> NO cuentan como MQL. Ajustable a futuro.
 const PERSONAL_EMAIL_DOMAINS = new Set([
@@ -278,6 +305,38 @@ async function fetchAdsResumenMensualRaw(sheetId, sheetName){
 }
 
 /* =========================================================================
+   FETCH ESPECÍFICO: pestaña "Resumen mensual por plaza". Columnas
+   confirmadas con el cliente: A=Mes (número 1-12), E=Inversión Nuevo León,
+   H=Inversión CDMX y Estado de México. La cantidad de filas es dinámica
+   (crece cada mes), así que se lee hasta encontrar la primera fila sin Mes.
+   ========================================================================= */
+async function fetchAdsPlazaRaw(sheetId, sheetName){
+  const url = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:json&headers=0&sheet=${encodeURIComponent(sheetName)}`;
+  const res = await fetch(url);
+  if(!res.ok) throw new Error(`HTTP ${res.status} al leer "${sheetName}"`);
+  const text = await res.text();
+  const match = text.match(/setResponse\(([\s\S]*)\);?\s*$/);
+  if(!match) throw new Error(`No se pudo leer "${sheetName}"`);
+  const json = JSON.parse(match[1]);
+  if(json.status === 'error') throw new Error(json.errors?.[0]?.detailed_message || `Error en "${sheetName}"`);
+  const rows = json.table.rows || [];
+  const cellNum = (row, idx) => { const c = row && row.c ? row.c[idx] : null; if(!c) return 0; return (typeof c.v === 'number') ? c.v : 0; };
+  const out = [];
+  // Filas 4 en adelante en la hoja (índice 3+ en 0-based) son datos; A=idx0(Mes), E=idx4(Inversión NL), H=idx7(Inversión CDMX/Edomex).
+  for(let i=3; i<rows.length; i++){
+    const row = rows[i];
+    const mesNum = cellNum(row,0);
+    if(!(mesNum>=1 && mesNum<=12)) continue; // fila vacía o fuera de rango -> se ignora
+    out.push({
+      fecha: new Date(2026, mesNum-1, 1),
+      spendNL: cellNum(row,4),
+      spendCDMXEdomex: cellNum(row,7),
+    });
+  }
+  return out;
+}
+
+/* =========================================================================
    Normalización de la respuesta futura de /api/google-ads-data (ver
    assets/google-ads-data.js de la skill) a la misma forma que usamos para
    el respaldo del Sheet, pero a nivel DIARIO en vez de mensual.
@@ -310,6 +369,21 @@ async function loadPaidMedia(){
     ADS_GRANULARITY = 'month';
     return await fetchAdsResumenMensualRaw(SHEET_ID_ADS, TAB_ADS_RESUMEN);
   }
+}
+
+let RAW_PLAZA_ERROR = null;
+async function loadPlazaData(){
+  try{ RAW_PLAZA_ERROR = null; return await fetchAdsPlazaRaw(SHEET_ID_ADS, TAB_ADS_PLAZA); }
+  catch(err){ RAW_PLAZA_ERROR = err.message; return []; }
+}
+
+/* Agrupa la Ciudad del Sheet de leads en las mismas 2 plazas que usa el
+   Sheet de inversión (que sólo separa Nuevo León vs. el resto). */
+function plazaGroupFromCiudad(ciudad){
+  const c = normKey(ciudad);
+  if(c.includes('nuevo leon')) return PLAZA_NL;
+  if(c.includes('cdmx') || c.includes('estado de mexico') || c.includes('ciudad de mexico')) return PLAZA_CDMX_EDOMEX;
+  return 'Otra plaza';
 }
 
 /* =========================================================================
@@ -379,6 +453,7 @@ function isPersonalEmail(email){
 let RAW = {};
 let ALL_LEADS = [];
 let ALL_ADS = [];
+let ALL_ADS_PLAZA = [];
 let filters = { preset:'all', customStart:null, customEnd:null, compare:false };
 
 /* =========================================================================
@@ -443,14 +518,56 @@ function spendForRange(range){
   }).reduce((s,a)=>s+a.spend,0);
 }
 
+/* Gasto por plaza dentro de un rango. La pestaña "por plaza" es mensual
+   (igual que el respaldo general), así que aplicamos el mismo criterio de
+   "mes completo si se traslapa con el rango". */
+function spendByPlazaForRange(range){
+  const out = { [PLAZA_NL]: 0, [PLAZA_CDMX_EDOMEX]: 0 };
+  ALL_ADS_PLAZA.forEach(a=>{
+    const monthStart = a.fecha;
+    const monthEnd = new Date(monthStart.getFullYear(), monthStart.getMonth()+1, 0, 23,59,59,999);
+    if(monthStart <= range.end && monthEnd >= range.start){
+      out[PLAZA_NL] += a.spendNL;
+      out[PLAZA_CDMX_EDOMEX] += a.spendCDMXEdomex;
+    }
+  });
+  return out;
+}
+
+/* Tabla mensual por plaza: combina inversión (por plaza) con leads/mql/posibleSql/sql
+   agrupados por la misma plaza (derivada de "Ciudad"). */
+function buildPlazaMonthlyTable(){
+  const map = {}; // key = `${monthKey}|${plaza}`
+  function bucket(mk, plaza){
+    const k = `${mk}|${plaza}`;
+    if(!map[k]) map[k] = { monthKey: mk, plaza, spend:0, leads:0, mql:0, posibleSql:0, sql:0 };
+    return map[k];
+  }
+  ALL_ADS_PLAZA.forEach(a=>{
+    const mk = monthKey(a.fecha);
+    bucket(mk, PLAZA_NL).spend += a.spendNL;
+    bucket(mk, PLAZA_CDMX_EDOMEX).spend += a.spendCDMXEdomex;
+  });
+  ALL_LEADS.forEach(l=>{
+    if(l.plaza !== PLAZA_NL && l.plaza !== PLAZA_CDMX_EDOMEX) return; // "Otra plaza" no tiene inversión que comparar
+    const b = bucket(l.monthKey, l.plaza);
+    b.leads += 1;
+    if(l.isMQL) b.mql += 1;
+    if(l.isPosibleSQL) b.posibleSql += 1;
+    if(l.isSQL) b.sql += 1;
+  });
+  return Object.values(map).sort((a,b)=> a.monthKey.localeCompare(b.monthKey) || a.plaza.localeCompare(b.plaza));
+}
+
 /* =========================================================================
    BUSINESS LOGIC
    ========================================================================= */
 function computeKPIs(leadsFiltered, spend){
   const leads = leadsFiltered.length;
   const mql = leadsFiltered.filter(l=>l.isMQL).length;
+  const posibleSql = leadsFiltered.filter(l=>l.isPosibleSQL).length;
   const sql = leadsFiltered.filter(l=>l.isSQL).length;
-  return { spend, leads, mql, sql };
+  return { spend, leads, mql, posibleSql, sql };
 }
 
 function processRawData(){
@@ -462,16 +579,24 @@ function processRawData(){
     const correo = (n['correo']||'').toString().trim();
     const personal = isPersonalEmail(correo);
     const isMQL = correo !== '' && personal === false;
-    const isSQL = empleados >= 400 || (empleados >= 200 && turnos >= 1);
+    // SQL (corregido): requiere además correo empresarial (= ser MQL).
+    const isSQL = (empleados >= 400 || (empleados >= 200 && turnos >= 1)) && isMQL;
+    // Posible SQL (nueva etapa, entre MQL y SQL): dos rutas independientes, cualquiera cuenta.
+    // Ruta 1: tamaño/turnos "de perfil SQL" sin importar el correo.
+    // Ruta 2: ≥200 empleados pero SIN correo empresarial (no llega a ser MQL todavía).
+    const rutaTamanoTurnos = empleados >= 200 && empleados <= 400 && turnos >= 2 && turnos <= 5;
+    const rutaSinCorreo = empleados >= 200 && !isMQL;
+    const isPosibleSQL = rutaTamanoTurnos || rutaSinCorreo;
     // Preferimos la columna "Mes" (número 1-12) sobre el mes derivado de "Fecha":
     // es más confiable y es la que el cliente pidió usar como filtro.
     const mesCol = Number(n['mes']);
     const monthIdx0 = (mesCol >= 1 && mesCol <= 12) ? (mesCol - 1) : fecha.getMonth();
     const monthKeyLead = `${fecha.getFullYear()}-${String(monthIdx0+1).padStart(2,'0')}`;
+    const ciudad = (n['ciudad']||'').toString();
     return {
       fecha, empresa: (n['empresa']||'').toString(), empleados, turnos,
-      ciudad: (n['ciudad']||'').toString(), status: (n['status']||'').toString().trim(),
-      correo, isMQL, isSQL, hasEmail: correo !== '', monthKey: monthKeyLead
+      ciudad, plaza: plazaGroupFromCiudad(ciudad), status: (n['status']||'').toString().trim(),
+      correo, isMQL, isSQL, isPosibleSQL, hasEmail: correo !== '', monthKey: monthKeyLead
     };
   }).filter(l => l.fecha);
 
@@ -482,14 +607,15 @@ function buildMonthlyTable(){
   const map = {};
   ALL_ADS.forEach(a=>{
     const key = monthKey(a.fecha);
-    if(!map[key]) map[key] = { key, spend:0, leads:0, mql:0, sql:0 };
+    if(!map[key]) map[key] = { key, spend:0, leads:0, mql:0, posibleSql:0, sql:0 };
     map[key].spend += a.spend;
   });
   ALL_LEADS.forEach(l=>{
     const key = l.monthKey;
-    if(!map[key]) map[key] = { key, spend:0, leads:0, mql:0, sql:0 };
+    if(!map[key]) map[key] = { key, spend:0, leads:0, mql:0, posibleSql:0, sql:0 };
     map[key].leads += 1;
     if(l.isMQL) map[key].mql += 1;
+    if(l.isPosibleSQL) map[key].posibleSql += 1;
     if(l.isSQL) map[key].sql += 1;
   });
   return Object.values(map).sort((a,b)=> a.key.localeCompare(b.key));
@@ -550,14 +676,17 @@ function deltaHtml(curr, prev, invert){
 
 function renderKpiGrid(kpis, prev){
   const pctMql = kpis.leads>0 ? fmtPct(kpis.mql/kpis.leads*100) : '—';
+  const pctPosibleSql = kpis.leads>0 ? fmtPct(kpis.posibleSql/kpis.leads*100) : '—';
   const pctSql = kpis.leads>0 ? fmtPct(kpis.sql/kpis.leads*100) : '—';
   const cards = [
     { label:'Gasto', value: fmtMXN(kpis.spend), color:'var(--info)', delta: prev?deltaHtml(kpis.spend, prev.spend, true):'' },
     { label:'Leads (conversiones)', value: fmtInt(kpis.leads), color:'var(--accent)', delta: prev?deltaHtml(kpis.leads, prev.leads, false):'' },
     { label:'MQL', value: fmtInt(kpis.mql), sub:`${pctMql} de los leads`, color:'var(--purple)', delta: prev?deltaHtml(kpis.mql, prev.mql, false):'' },
+    { label:'Posible SQL', value: fmtInt(kpis.posibleSql), sub:`${pctPosibleSql} de los leads`, color:'#c98a2e', delta: prev?deltaHtml(kpis.posibleSql, prev.posibleSql, false):'' },
     { label:'SQL (leads de calidad)', value: fmtInt(kpis.sql), sub:`${pctSql} de los leads`, color:'var(--accent-2)', delta: prev?deltaHtml(kpis.sql, prev.sql, false):'' },
     { label:'CPA · Lead', value: fmtCPA(kpis.spend, kpis.leads), color:'var(--warning)', delta:'' },
     { label:'CPA · MQL', value: fmtCPA(kpis.spend, kpis.mql), color:'var(--warning)', delta:'' },
+    { label:'CPA · Posible SQL', value: fmtCPA(kpis.spend, kpis.posibleSql), color:'var(--warning)', delta:'' },
     { label:'CPA · SQL', value: fmtCPA(kpis.spend, kpis.sql), color:'var(--warning)', delta:'' },
   ];
   document.getElementById('kpiGridMain').innerHTML = cards.map(c => `
@@ -599,6 +728,7 @@ function renderPipelineChart(monthly){
     data: { labels, datasets:[
       { label:'Leads', data: monthly.map(m=>m.leads), backgroundColor:'#7fa89a' },
       { label:'MQL', data: monthly.map(m=>m.mql), backgroundColor:'#7c5cbf' },
+      { label:'Posible SQL', data: monthly.map(m=>m.posibleSql), backgroundColor:'#c98a2e' },
       { label:'SQL', data: monthly.map(m=>m.sql), backgroundColor:'#006b47' },
     ]},
     options: {
@@ -619,21 +749,25 @@ function renderMonthlyTable(monthly){
       <td>${fmtMXN(m.spend)}</td>
       <td>${fmtInt(m.leads)}</td>
       <td>${fmtInt(m.mql)}</td>
+      <td>${fmtInt(m.posibleSql)}</td>
       <td>${fmtInt(m.sql)}</td>
       <td>${fmtCPA(m.spend, m.leads)}</td>
       <td>${fmtCPA(m.spend, m.mql)}</td>
+      <td>${fmtCPA(m.spend, m.posibleSql)}</td>
       <td>${fmtCPA(m.spend, m.sql)}</td>
     </tr>`).join('');
-  const totals = monthly.reduce((acc,m)=>({ spend:acc.spend+m.spend, leads:acc.leads+m.leads, mql:acc.mql+m.mql, sql:acc.sql+m.sql }), {spend:0,leads:0,mql:0,sql:0});
+  const totals = monthly.reduce((acc,m)=>({ spend:acc.spend+m.spend, leads:acc.leads+m.leads, mql:acc.mql+m.mql, posibleSql:acc.posibleSql+m.posibleSql, sql:acc.sql+m.sql }), {spend:0,leads:0,mql:0,posibleSql:0,sql:0});
   const totalRow = `
     <tr class="total-row">
       <td>Total histórico</td>
       <td>${fmtMXN(totals.spend)}</td>
       <td>${fmtInt(totals.leads)}</td>
       <td>${fmtInt(totals.mql)}</td>
+      <td>${fmtInt(totals.posibleSql)}</td>
       <td>${fmtInt(totals.sql)}</td>
       <td>${fmtCPA(totals.spend, totals.leads)}</td>
       <td>${fmtCPA(totals.spend, totals.mql)}</td>
+      <td>${fmtCPA(totals.spend, totals.posibleSql)}</td>
       <td>${fmtCPA(totals.spend, totals.sql)}</td>
     </tr>`;
   document.getElementById('mainTableBody').innerHTML = rows + totalRow;
@@ -647,12 +781,92 @@ function renderLeadsTable(leadsInRange){
       <td>${l.empresa || '—'}</td>
       <td>${fmtInt(l.empleados)}</td>
       <td>${fmtInt(l.turnos)}</td>
-      <td>${l.ciudad || '—'}</td>
+      <td>${l.ciudad ? `${l.ciudad} <span style="color:var(--text-muted);font-size:.76rem;">(${l.plaza})</span>` : '—'}</td>
       <td>${l.correo || '—'}</td>
       <td><span class="pill ${l.isMQL?'yes':'no'}">${l.isMQL?'Sí':'No'}</span></td>
+      <td><span class="pill ${l.isPosibleSQL?'yes':'no'}">${l.isPosibleSQL?'Sí':'No'}</span></td>
       <td><span class="pill ${l.isSQL?'yes':'no'}">${l.isSQL?'Sí':'No'}</span></td>
       <td>${l.status || 'Pendiente de revisar'}</td>
-    </tr>`).join('') || `<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:2rem;">Sin leads en este período.</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="10" style="text-align:center;color:var(--text-muted);padding:2rem;">Sin leads en este período.</td></tr>`;
+}
+
+function renderPlazaTab(range, leadsInRange){
+  // Alertas propias de esta pestaña
+  const cards = [];
+  if(RAW_PLAZA_ERROR){
+    cards.push(`<div class="alert-card" style="--card-color:var(--danger)">
+      <div class="a-title">🔴 Error leyendo "Resumen mensual por plaza"</div>
+      <div class="a-text">${RAW_PLAZA_ERROR}</div>
+    </div>`);
+  }
+  const otraPlaza = leadsInRange.filter(l=>l.plaza==='Otra plaza').length;
+  if(otraPlaza > 0){
+    cards.push(`<div class="alert-card" style="--card-color:var(--purple)">
+      <div class="a-title">📍 ${fmtInt(otraPlaza)} leads con ciudad no reconocida</div>
+      <div class="a-text">No se pudieron agrupar en Nuevo León ni en CDMX/Estado de México (revisa el valor de "Ciudad" en esas filas). No se incluyen en las tarjetas ni la tabla de esta pestaña.</div>
+    </div>`);
+  }
+  document.getElementById('plazaAlertBanner').innerHTML = cards.join('');
+
+  // KPIs por plaza (respetando el filtro de periodo global)
+  const spendByPlaza = spendByPlazaForRange(range);
+  const plazas = [PLAZA_NL, PLAZA_CDMX_EDOMEX];
+  const kpiCards = [];
+  plazas.forEach(plaza => {
+    const leadsPlaza = leadsInRange.filter(l=>l.plaza===plaza);
+    const kpis = computeKPIs(leadsPlaza, spendByPlaza[plaza]);
+    kpiCards.push({ label:`${plaza} · Gasto`, value: fmtMXN(kpis.spend), color:'var(--info)' });
+    kpiCards.push({ label:`${plaza} · Leads`, value: fmtInt(kpis.leads), color:'var(--accent)' });
+    kpiCards.push({ label:`${plaza} · CPL`, value: fmtCPA(kpis.spend, kpis.leads), color:'var(--warning)' });
+    kpiCards.push({ label:`${plaza} · CPA MQL`, value: fmtCPA(kpis.spend, kpis.mql), color:'var(--warning)' });
+    kpiCards.push({ label:`${plaza} · CPA SQL`, value: fmtCPA(kpis.spend, kpis.sql), color:'var(--warning)' });
+  });
+  document.getElementById('kpiGridPlaza').innerHTML = kpiCards.map(c => `
+    <div class="kpi-card" style="--card-color:${c.color}">
+      <div class="kpi-label">${c.label}</div>
+      <div class="kpi-value">${c.value}</div>
+    </div>`).join('');
+
+  // Gráfica: Gastado vs Generado por plaza (agregado del período seleccionado)
+  const chartData = plazas.map(plaza => {
+    const leadsPlaza = leadsInRange.filter(l=>l.plaza===plaza);
+    return { plaza, spend: spendByPlaza[plaza], leads: leadsPlaza.length };
+  });
+  if(window._chartPlaza) window._chartPlaza.destroy();
+  window._chartPlaza = new Chart(document.getElementById('chartPlaza').getContext('2d'), {
+    data: {
+      labels: chartData.map(d=>d.plaza),
+      datasets: [
+        { type:'bar', label:'Gasto', data: chartData.map(d=>d.spend), backgroundColor:'rgba(0,107,71,.75)', yAxisID:'y' },
+        { type:'bar', label:'Leads generados', data: chartData.map(d=>d.leads), backgroundColor:'#2f7fb0', yAxisID:'y1' },
+      ]
+    },
+    options: {
+      responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{ labels:{ color:'#182a20' } }, tooltip:{ backgroundColor:'rgba(20,40,30,.92)', padding:12 } },
+      scales:{
+        x:{ grid:{ color:'rgba(0,0,0,.05)' }, ticks:{ color:'#657267' } },
+        y:{ position:'left', grid:{ color:'rgba(0,0,0,.05)' }, ticks:{ color:'#657267', callback:v=>fmtMXN(v) } },
+        y1:{ position:'right', grid:{ display:false }, ticks:{ color:'#657267' } }
+      }
+    }
+  });
+
+  // Tabla mensual por plaza (histórico completo, no filtrada por periodo)
+  const monthlyPlaza = buildPlazaMonthlyTable();
+  document.getElementById('plazaTableBody').innerHTML = monthlyPlaza.map(m => `
+    <tr>
+      <td>${monthLabel(m.monthKey)}</td>
+      <td>${m.plaza}</td>
+      <td>${fmtMXN(m.spend)}</td>
+      <td>${fmtInt(m.leads)}</td>
+      <td>${fmtInt(m.mql)}</td>
+      <td>${fmtInt(m.posibleSql)}</td>
+      <td>${fmtInt(m.sql)}</td>
+      <td>${fmtCPA(m.spend, m.leads)}</td>
+      <td>${fmtCPA(m.spend, m.mql)}</td>
+      <td>${fmtCPA(m.spend, m.sql)}</td>
+    </tr>`).join('') || `<tr><td colspan="10" style="text-align:center;color:var(--text-muted);padding:2rem;">Sin datos todavía.</td></tr>`;
 }
 
 function renderAll(){
@@ -678,6 +892,7 @@ function renderAll(){
   renderPipelineChart(monthly);
   renderMonthlyTable(monthly);
   renderLeadsTable(leadsInRange);
+  renderPlazaTab(range, leadsInRange);
 }
 
 /* =========================================================================
@@ -685,13 +900,15 @@ function renderAll(){
    ========================================================================= */
 async function init(){
   try{
-    const [leadsResult, adsData] = await Promise.all([
+    const [leadsResult, adsData, plazaData] = await Promise.all([
       fetchSheetTabSafe(SHEET_ID_LEADS, TAB_LEADS),
-      loadPaidMedia()
+      loadPaidMedia(),
+      loadPlazaData()
     ]);
     RAW.leadsRows = leadsResult.rows;
     RAW.leadsError = leadsResult.error;
     RAW.adsMonthly = adsData;
+    ALL_ADS_PLAZA = plazaData;
 
     processRawData();
     renderMonthPresetButtons();

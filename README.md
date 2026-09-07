@@ -37,7 +37,24 @@ Para que el cálculo de **MQL** funcione, agrega una columna llamada exactamente
 
 Dominios que **no** cuentan como correo de empresa (ajustable en el código, constante `PERSONAL_EMAIL_DOMAINS`): gmail, hotmail, outlook (incl. .com.mx), live, yahoo, icloud, msn, aol, protonmail, gmx, y el dominio interno de la agencia (`rockinmedia.com` / `rockinmedia.mx` — si el dominio real es otro, dímelo y lo corrijo). Si falta alguno más o hay que quitar uno, dímelo y lo ajusto.
 
-## 5. Otros detalles ya incorporados
+## 5. Embudo actualizado
+
+- **Lead:** toda fila del Sheet de leads.
+- **MQL:** correo de dominio empresarial (no personal, no `rockinmedia`).
+- **Posible SQL** (nueva, entre MQL y SQL): cualquiera de estas dos rutas —
+  1. 200–400 empleados **y** 2–5 turnos (sin importar el correo), **o**
+  2. ≥200 empleados **y** sin correo empresarial.
+- **SQL** (corregido, ahora exige correo empresarial): `(empleados ≥400 O (200-399 empleados Y ≥1 turno)) Y correo empresarial`.
+
+Nota: un lead puede contar en "Posible SQL" y en "SQL" al mismo tiempo (son indicadores independientes, igual que MQL/SQL ya funcionaban) — no es un embudo estrictamente excluyente.
+
+## 6. Pestaña "Por plaza"
+
+- Inversión: Sheet "Reporte Comercial", pestaña "Resumen mensual por plaza" — columna A (Mes), E (Inversión Nuevo León), H (Inversión CDMX y Estado de México).
+- Leads: Sheet "Plato - LEADS", columna "Ciudad", agrupada en las mismas 2 plazas que separa la inversión (Nuevo León vs. CDMX+Estado de México juntos, ya que la inversión no se reporta por separado para esas dos ciudades).
+- Muestra Gasto, Leads, CPL, CPA MQL y CPA SQL por plaza, más una gráfica de gastado vs. generado y una tabla mensual desglosada.
+
+## 7. Otros detalles ya incorporados
 - El agrupamiento mensual de leads usa la columna **"Mes"** del Sheet (no la fecha), tal cual lo pediste.
 - El dashboard ahora tiene botones de "Mes específico" en el filtro de periodo (uno por cada mes con datos), además de los presets normales.
 - La pestaña "Resumen mensual" del Sheet de Google Ads ya sólo trae 2026 — se quitó 2025 a propósito para que las gráficas se lean mejor.
