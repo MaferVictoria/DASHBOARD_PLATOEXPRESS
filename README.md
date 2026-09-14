@@ -41,12 +41,14 @@ Dominios que **no** cuentan como correo de empresa (ajustable en el código, con
 
 - **Lead:** toda fila del Sheet de leads.
 - **MQL:** correo de dominio empresarial (no personal, no `rockinmedia`).
-- **Posible SQL** (nueva, entre MQL y SQL): cualquiera de estas dos rutas —
-  1. 200–400 empleados **y** 2–5 turnos (sin importar el correo), **o**
+- **SQL** (fórmula final, ambas rutas exigen correo empresarial):
+  1. ≥400 empleados **y** ≥1 turno, **o**
+  2. 200-399 empleados **y** exactamente 1 turno.
+- **Posible SQL** (entre MQL y SQL): cualquiera de estas dos rutas —
+  1. 200-399 empleados **y** 2-5 turnos (sin importar el correo), **o**
   2. ≥200 empleados **y** sin correo empresarial.
-- **SQL** (corregido, ahora exige correo empresarial): `(empleados ≥400 O (200-399 empleados Y ≥1 turno)) Y correo empresarial`.
 
-Nota: un lead puede contar en "Posible SQL" y en "SQL" al mismo tiempo (son indicadores independientes, igual que MQL/SQL ya funcionaban) — no es un embudo estrictamente excluyente.
+Estas fórmulas se revisaron a propósito para que **nunca se traslapen** SQL y Posible SQL (antes sí podían coincidir en un mismo lead) — probado con los casos límite exactos (400 vs. 399 empleados, 1 vs. 2 turnos, con y sin correo).
 
 ## 6. Pestaña "Por plaza"
 

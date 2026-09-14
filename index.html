@@ -579,12 +579,17 @@ function processRawData(){
     const correo = (n['correo']||'').toString().trim();
     const personal = isPersonalEmail(correo);
     const isMQL = correo !== '' && personal === false;
-    // SQL (corregido): requiere además correo empresarial (= ser MQL).
-    const isSQL = (empleados >= 400 || (empleados >= 200 && turnos >= 1)) && isMQL;
-    // Posible SQL (nueva etapa, entre MQL y SQL): dos rutas independientes, cualquiera cuenta.
-    // Ruta 1: tamaño/turnos "de perfil SQL" sin importar el correo.
+    // SQL (corrección final, 2 rutas, ambas exigen correo empresarial):
+    //  Ruta 1: ≥400 empleados Y ≥1 turno
+    //  Ruta 2: 200-399 empleados Y EXACTAMENTE 1 turno (2+ turnos se queda en Posible SQL)
+    const sqlRuta1 = empleados >= 400 && turnos >= 1;
+    const sqlRuta2 = empleados >= 200 && empleados <= 399 && turnos === 1;
+    const isSQL = isMQL && (sqlRuta1 || sqlRuta2);
+    // Posible SQL (entre MQL y SQL): dos rutas independientes, cualquiera cuenta.
+    // Ruta 1: tamaño/turnos "de perfil SQL" pero con 2-5 turnos (1 turno ya es SQL),
+    //   y tope en 399 empleados (400+ ya es terreno de SQL) para que nunca choque con SQL.
     // Ruta 2: ≥200 empleados pero SIN correo empresarial (no llega a ser MQL todavía).
-    const rutaTamanoTurnos = empleados >= 200 && empleados <= 400 && turnos >= 2 && turnos <= 5;
+    const rutaTamanoTurnos = empleados >= 200 && empleados <= 399 && turnos >= 2 && turnos <= 5;
     const rutaSinCorreo = empleados >= 200 && !isMQL;
     const isPosibleSQL = rutaTamanoTurnos || rutaSinCorreo;
     // Preferimos la columna "Mes" (número 1-12) sobre el mes derivado de "Fecha":
