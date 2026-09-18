@@ -190,6 +190,14 @@
 
   <div id="tab-plaza" class="tab-content">
     <div class="container">
+      <div class="fb-group" style="margin-bottom:1.25rem;">
+        <span class="fb-label">Plaza</span>
+        <select id="plazaSelector" style="padding:.55rem 1rem;border-radius:8px;border:1px solid var(--border);background:#eef2ef;font-weight:700;font-size:.85rem;color:var(--text);">
+          <option value="all">Todas las plazas</option>
+          <option value="Nuevo León">Nuevo León</option>
+          <option value="CDMX y Estado de México">CDMX y Estado de México</option>
+        </select>
+      </div>
       <div class="alert-banner" id="plazaAlertBanner"></div>
       <div class="kpi-grid" id="kpiGridPlaza"></div>
 
@@ -521,6 +529,7 @@ let RAW = {};
 let ALL_LEADS = [];
 let ALL_ADS_PLAZA = [];
 let filters = { preset:'all', customStart:null, customEnd:null, compare:false };
+let plazaFilter = 'all'; // 'all' | PLAZA_NL | PLAZA_CDMX_EDOMEX
 
 /* =========================================================================
    FILTER RANGE RESOLUTION
@@ -698,6 +707,28 @@ function updateStatusBadges(){
 
 function renderAlerts(leadsInRange){
   const cards = [];
+  // === DIAGNÓSTICO TEMPORAL — quitar una vez resuelto el tema de los meses en 0 ===
+  if(RAW.leadsRows && RAW.leadsRows.length){
+    const raw0 = RAW.leadsRows[0];
+    const rawKeys = Object.keys(raw0);
+    const fechaRaw = raw0['Fecha'];
+    const mesRaw = raw0['Mes'];
+    const sample = ALL_LEADS.slice(0,5).map(l =>
+      `${(l.empresa||'(sin nombre)').toString().slice(0,18)}: fechaCruda visible arriba, fechaParseada=${l.fecha.getFullYear()}-${String(l.fecha.getMonth()+1).padStart(2,'0')}-${String(l.fecha.getDate()).padStart(2,'0')}, monthKey=${l.monthKey}`
+    ).join('<br>');
+    const monthCounts = {};
+    ALL_LEADS.forEach(l => { monthCounts[l.monthKey] = (monthCounts[l.monthKey]||0)+1; });
+    cards.push(`<div class="alert-card" style="--card-color:#7c5cbf; grid-column:1/-1;">
+      <div class="a-title">🔧 Diagnóstico temporal (bórrame después)</div>
+      <div class="a-text">
+        Filas crudas recibidas: ${RAW.leadsRows.length} · ALL_LEADS después de procesar: ${ALL_LEADS.length}<br>
+        Encabezados detectados: ${rawKeys.join(', ')}<br>
+        Fila[0] cruda → Fecha="${fechaRaw}" (tipo ${typeof fechaRaw}) · Mes="${mesRaw}" (tipo ${typeof mesRaw})<br>
+        Primeros 5 procesados:<br>${sample}<br>
+        Conteo de leads por monthKey: ${JSON.stringify(monthCounts)}
+      </div>
+    </div>`);
+  }
   if(!IS_ADS_LIVE){
     cards.push(`<div class="alert-card" style="--card-color:var(--warning)">
       <div class="a-title">⚠️ Google Ads en vivo no disponible</div>
@@ -885,9 +916,9 @@ function renderPlazaTab(range, leadsInRange){
   }
   document.getElementById('plazaAlertBanner').innerHTML = cards.join('');
 
-  // KPIs por plaza (respetando el filtro de periodo global)
+  // KPIs por plaza (respetando el filtro de periodo global Y el selector de plaza)
   const spendByPlaza = spendByPlazaForRange(range);
-  const plazas = [PLAZA_NL, PLAZA_CDMX_EDOMEX];
+  const plazas = plazaFilter === 'all' ? [PLAZA_NL, PLAZA_CDMX_EDOMEX] : [plazaFilter];
   const kpiCards = [];
   plazas.forEach(plaza => {
     const leadsPlaza = leadsInRange.filter(l=>l.plaza===plaza);
@@ -929,8 +960,8 @@ function renderPlazaTab(range, leadsInRange){
     }
   });
 
-  // Tabla mensual por plaza (histórico completo, no filtrada por periodo)
-  const monthlyPlaza = buildPlazaMonthlyTable();
+  // Tabla mensual por plaza (histórico completo, no filtrada por periodo, pero sí por la plaza elegida)
+  const monthlyPlaza = buildPlazaMonthlyTable().filter(m => plazaFilter==='all' || m.plaza===plazaFilter);
   document.getElementById('plazaTableBody').innerHTML = monthlyPlaza.map(m => `
     <tr>
       <td>${monthLabel(m.monthKey)}</td>
@@ -1082,6 +1113,7 @@ document.getElementById('periodPanel').addEventListener('click', (e) => {
 document.getElementById('customStart').addEventListener('change', e => { filters.customStart = e.target.value; if(filters.preset==='custom') renderAll(); });
 document.getElementById('customEnd').addEventListener('change', e => { filters.customEnd = e.target.value; if(filters.preset==='custom') renderAll(); });
 document.getElementById('compareToggle').addEventListener('change', e => { filters.compare = e.target.checked; renderAll(); });
+document.getElementById('plazaSelector').addEventListener('change', e => { plazaFilter = e.target.value; renderAll(); });
 document.querySelectorAll('.tab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
