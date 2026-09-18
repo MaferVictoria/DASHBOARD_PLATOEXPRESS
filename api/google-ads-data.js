@@ -49,6 +49,13 @@ let dataCache = { data: null, fetchedAt: 0 };
 const DATA_CACHE_TTL_MS = 15 * 60 * 1000;
 
 const STATUS_MAP = { ENABLED: "Activa", PAUSED: "Pausada", REMOVED: "Removida" };
+// search_term_view usa un enum de status distinto al de campañas/keywords.
+const SEARCH_TERM_STATUS_MAP = {
+  ADDED: "Agregada como keyword",
+  EXCLUDED: "Excluida (negativa)",
+  ADDED_EXCLUDED: "Agregada y excluida",
+  NONE: "Ninguna acción",
+};
 const microsToCurrency = (v) => (v === undefined || v === null ? 0 : parseFloat(v) / 1_000_000);
 const num = (v) => (v === undefined || v === null ? 0 : parseFloat(v));
 
@@ -149,35 +156,37 @@ async function fetchGoogleAdsData() {
     Conversions: num(r.metrics.conversions),
   }));
 
-  // Keyword-level daily performance — the real cost-per-keyword data the Sheet
-  // could never provide.
-  const keywordRows = await gaqlSearch(`
+  // Términos de búsqueda que activaron la pauta — sólo se piden las métricas
+  // "contables" (impresiones, interacciones, costo, conversiones) en crudo,
+  // por día. Los porcentajes/promedios (interacción, conversión, costo por
+  // conversión) se calculan en el dashboard DESPUÉS de sumar por el periodo
+  // elegido — promediar los porcentajes que ya vienen calculados por día
+  // sería matemáticamente incorrecto (ver notas en index.html).
+  const searchTermRows = await gaqlSearch(`
     SELECT
       segments.date,
-      campaign.name,
-      ad_group_criterion.keyword.text,
-      ad_group_criterion.status,
-      metrics.cost_micros,
-      metrics.clicks,
+      search_term_view.search_term,
+      search_term_view.status,
       metrics.impressions,
+      metrics.interactions,
+      metrics.cost_micros,
       metrics.conversions
-    FROM keyword_view
+    FROM search_term_view
     WHERE segments.date BETWEEN '${start}' AND '${end}'
     ORDER BY segments.date ASC
   `);
 
-  const keywordDaily = keywordRows.map((r) => ({
+  const searchTermDaily = searchTermRows.map((r) => ({
     Date: r.segments.date,
-    Campaign: r.campaign.name,
-    Keyword: r.adGroupCriterion.keyword.text,
-    Estado: STATUS_MAP[r.adGroupCriterion.status] || r.adGroupCriterion.status,
-    Cost: microsToCurrency(r.metrics.costMicros),
-    Clicks: num(r.metrics.clicks),
+    SearchTerm: r.searchTermView.searchTerm,
+    Status: SEARCH_TERM_STATUS_MAP[r.searchTermView.status] || r.searchTermView.status,
     Impressions: num(r.metrics.impressions),
+    Interactions: num(r.metrics.interactions),
+    Cost: microsToCurrency(r.metrics.costMicros),
     Conversions: num(r.metrics.conversions),
   }));
 
-  return { campaignDaily, keywordDaily, fetchedAt: new Date().toISOString(), apiVersion: API_VERSION };
+  return { campaignDaily, searchTermDaily, fetchedAt: new Date().toISOString(), apiVersion: API_VERSION };
 }
 
 export default async function handler(req, res) {

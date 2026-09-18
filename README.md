@@ -3,66 +3,81 @@
 ## Qué hay en este repo
 ```
 index.html              ← el dashboard completo (una sola página, sin build step)
-api/google-ads-data.js  ← función serverless de Vercel para Google Ads (lista, falta configurar)
+api/google-ads-data.js  ← función serverless de Vercel para Google Ads
 ```
 
 ## Estado actual
-- **Pipeline comercial:** en vivo, leyendo directo de tu Google Sheet "Plato - LEADS" (pestaña "Hoja 1").
-- **Paid media (Google Ads):** en modo respaldo, usando la pestaña "Resumen mensual" del Sheet "Reporte Comercial - Plato Express" (datos mensuales). En cuanto conectes la API en vivo (ver abajo), el dashboard cambia solo, sin tocar código.
+- **Pipeline comercial:** en vivo, leyendo directo del Google Sheet "Plato - LEADS" (pestaña "Hoja 1").
+- **Google Ads:** conectado en vivo. Ver sección 6 para exactamente qué alimenta y qué no.
 
 ## 1. Desplegar en Vercel
 1. Sube este contenido a un repo de GitHub.
 2. En Vercel: **Add New → Project → Import** ese repo.
 3. Framework preset: "Other" (es HTML estático, no necesita build).
-4. Deploy. Con eso el dashboard ya funciona con el pipeline en vivo y Google Ads en modo respaldo.
+4. Deploy.
 
-## 2. Conectar Google Ads en vivo (cuando tengas las credenciales)
-En Vercel → tu proyecto → **Settings → Environment Variables**, agrega:
+## 2. Variables de entorno (Google Ads)
+En Vercel → tu proyecto → **Settings → Environment Variables**:
 
 | Variable | De dónde sale |
 |---|---|
-| `GOOGLE_ADS_DEVELOPER_TOKEN` | Google Ads → Herramientas → Centro de API |
-| `GOOGLE_ADS_CLIENT_ID` | Google Cloud Console → credenciales OAuth (tipo **"Aplicación web"**, no "de escritorio") |
+| `GOOGLE_ADS_DEVELOPER_TOKEN` | Google Ads → Herramientas → Centro de API (legado; Google ya no lo exige desde el 9-sept-2026, pero no hace daño mantenerlo) |
+| `GOOGLE_ADS_CLIENT_ID` | Google Cloud Console → Credenciales OAuth (tipo **"Aplicación web"**) |
 | `GOOGLE_ADS_CLIENT_SECRET` | mismo lugar que el Client ID |
-| `GOOGLE_ADS_REFRESH_TOKEN` | se genera una vez vía OAuth Playground con el Client ID/Secret de arriba |
-| `GOOGLE_ADS_CUSTOMER_ID` | ID de la cuenta de Google Ads a conectar (sin guiones) |
-| `GOOGLE_ADS_LOGIN_CUSTOMER_ID` | sólo si la cuenta está bajo un MCC |
+| `GOOGLE_ADS_REFRESH_TOKEN` | se genera vía OAuth Playground con el Client ID/Secret de arriba |
+| `GOOGLE_ADS_CUSTOMER_ID` | ID de la cuenta de Plato Express en Google Ads (sin guiones) |
+| `GOOGLE_ADS_LOGIN_CUSTOMER_ID` | ID del MCC (sin guiones) |
 
-Si quieres, te guío paso a paso para sacar cada una de estas cuando llegue el momento — es la parte donde más se traba la gente la primera vez.
+Importante: desde sept-2026 el nivel de acceso de la API ya no se pide en Google Ads, sino en Google Cloud Console → `console.cloud.google.com/google/ads-apis/overview`, dentro del MISMO proyecto que usaste para las credenciales OAuth. Nivel "Explorador" es suficiente para todo lo que hace este dashboard.
 
-Una vez puestas las variables y redeployado, el dashboard detecta automáticamente que `/api/google-ads-data` responde y cambia solo a "🟢 Google Ads en vivo" (y de paso, los filtros de Hoy/Ayer/7 días se vuelven exactos, porque ahí sí hay dato diario).
+## 3. Columna "Correo" (para MQL)
+La columna **"Correo"** en el Sheet "Plato - LEADS" (Hoja 1) es la que determina MQL. Mientras un lead no tenga correo capturado, cuenta como Lead pero no como MQL.
 
-## 3. Pendiente de tu lado: columna "Correo"
-Para que el cálculo de **MQL** funcione, agrega una columna llamada exactamente **"Correo"** en el Sheet "Plato - LEADS" (Hoja 1), con el correo de cada lead. Mientras un lead no tenga correo capturado, cuenta como Lead pero no como MQL (el dashboard lo marca como "pendiente", no como error).
+Dominios que **no** cuentan como correo de empresa (constante `PERSONAL_EMAIL_DOMAINS` en el código): gmail, hotmail, outlook (incl. .com.mx), live, yahoo, icloud, msn, aol, protonmail, gmx, y el dominio interno de la agencia (`rockinmedia.com` / `.mx`).
 
-Dominios que **no** cuentan como correo de empresa (ajustable en el código, constante `PERSONAL_EMAIL_DOMAINS`): gmail, hotmail, outlook (incl. .com.mx), live, yahoo, icloud, msn, aol, protonmail, gmx, y el dominio interno de la agencia (`rockinmedia.com` / `rockinmedia.mx` — si el dominio real es otro, dímelo y lo corrijo). Si falta alguno más o hay que quitar uno, dímelo y lo ajusto.
+## 4. Fuentes de datos (IDs)
+- Pipeline: Sheet `1QEZ_w30onOHOLN_VJ4pUt5e90LC9z4ZXILa5Qz7vrA8`, pestaña `Hoja 1`.
+- Google Ads (Sheet, ver sección 6): Sheet `1ToVcoGqYLd3PR6HghpyjQrVPCWEttkBbSxG2wKigwaI`, pestañas `Resumen mensual` y `Resumen mensual por plaza`.
 
-## 5. Embudo actualizado
+Ambos Sheets deben mantenerse compartidos como "Cualquier persona con el enlace puede ver".
+
+## 5. Embudo
 
 - **Lead:** toda fila del Sheet de leads.
-- **MQL:** correo de dominio empresarial (no personal, no `rockinmedia`).
-- **SQL** (fórmula final, ambas rutas exigen correo empresarial):
+- **MQL:** correo de dominio empresarial.
+- **SQL** (ambas rutas exigen correo empresarial):
   1. ≥400 empleados **y** ≥1 turno, **o**
   2. 200-399 empleados **y** exactamente 1 turno.
 - **Posible SQL** (entre MQL y SQL): cualquiera de estas dos rutas —
   1. 200-399 empleados **y** 2-5 turnos (sin importar el correo), **o**
   2. ≥200 empleados **y** sin correo empresarial.
 
-Estas fórmulas se revisaron a propósito para que **nunca se traslapen** SQL y Posible SQL (antes sí podían coincidir en un mismo lead) — probado con los casos límite exactos (400 vs. 399 empleados, 1 vs. 2 turnos, con y sin correo).
+Estas fórmulas están diseñadas para que SQL y Posible SQL **nunca se traslapen** — probado con los casos límite (400 vs. 399 empleados, 1 vs. 2 turnos, con y sin correo).
 
-## 6. Pestaña "Por plaza"
+## 6. De dónde sale cada número (arquitectura de fuentes — importante)
 
+Google Ads en vivo **sólo** alimenta 3 cosas (decisión explícita del cliente):
+1. La tarjeta **Gasto** (Resumen Ejecutivo).
+2. La tarjeta **Conversiones** y **CPA · Lead** (Gasto ÷ Conversiones, ambos en vivo).
+3. La pestaña **Términos de búsqueda** (no existe en ningún Sheet; si la API no responde, esa pestaña muestra un aviso en vez de una tabla vacía).
+
+**Todo lo demás** — MQL, Posible SQL, SQL, sus CPA, la tabla y gráficas mensuales, "Detalle de Leads" y "Por plaza" — sigue viniendo de los Google Sheets, sin importar si Google Ads en vivo está funcionando o no. El Gasto usado para CPA·MQL/Posible SQL/SQL es siempre el del Sheet "Resumen mensual", nunca el de la API.
+
+Por eso vas a ver dos números de "Gasto" ligeramente distintos en el dashboard (la tarjeta de arriba en vivo, vs. la tabla mensual con el del Sheet) — es intencional, no un error.
+
+## 7. Pestaña "Por plaza"
 - Inversión: Sheet "Reporte Comercial", pestaña "Resumen mensual por plaza" — columna A (Mes), E (Inversión Nuevo León), H (Inversión CDMX y Estado de México).
-- Leads: Sheet "Plato - LEADS", columna "Ciudad", agrupada en las mismas 2 plazas que separa la inversión (Nuevo León vs. CDMX+Estado de México juntos, ya que la inversión no se reporta por separado para esas dos ciudades).
-- Muestra Gasto, Leads, CPL, CPA MQL y CPA SQL por plaza, más una gráfica de gastado vs. generado y una tabla mensual desglosada.
+- Leads: Sheet "Plato - LEADS", columna "Ciudad", agrupada en esas mismas 2 plazas.
 
-## 7. Otros detalles ya incorporados
-- El agrupamiento mensual de leads usa la columna **"Mes"** del Sheet (no la fecha), tal cual lo pediste.
-- El dashboard ahora tiene botones de "Mes específico" en el filtro de periodo (uno por cada mes con datos), además de los presets normales.
-- La pestaña "Resumen mensual" del Sheet de Google Ads ya sólo trae 2026 — se quitó 2025 a propósito para que las gráficas se lean mejor.
+## 8. Pestaña "Términos de búsqueda"
+Por cada término que activó la pauta: Estado (agregada/excluida como keyword), Impresiones, Interacciones, % Interacción, Costo promedio, Costo, % Conversión, Conversiones, Costo por conversión. Sólo funciona con la API en vivo conectada.
 
-## 4. Fuentes de datos (IDs, por si algún día cambian de nombre)
-- Pipeline: Sheet `1QEZ_w30onOHOLN_VJ4pUt5e90LC9z4ZXILa5Qz7vrA8`, pestaña `Hoja 1`.
-- Google Ads (respaldo): Sheet `1ToVcoGqYLd3PR6HghpyjQrVPCWEttkBbSxG2wKigwaI`, pestaña `Resumen mensual`.
+## 9. Bug corregido: filas sin fecha
+Una fila con "Fecha" vacía en el Sheet de leads (ej. una fila en blanco) hacía que TODO el conteo de Leads/MQL/Posible SQL/SQL se fuera a 0, sin ningún aviso. Ya está corregido: esas filas se ignoran solas.
 
-Ambos Sheets deben mantenerse compartidos como "Cualquier persona con el enlace puede ver".
+**Si algún mes te sigue pareciendo con menos leads de los que esperabas**, revisa si hay un filtro activo (ícono de embudo) en alguna columna de "Hoja 1" — un filtro activo hace que Sheets sólo entregue las filas visibles, no todas. Datos → Quitar filtro si ves uno.
+
+## 10. Otros detalles
+- El agrupamiento mensual de leads usa la columna **"Mes"** del Sheet (no la fecha).
+- Hay botones de "Mes específico" en el filtro de periodo, uno por cada mes con datos.
+- La pestaña "Resumen mensual" del Sheet de Ads sólo trae 2026 (se quitó 2025 para que las gráficas se lean mejor).

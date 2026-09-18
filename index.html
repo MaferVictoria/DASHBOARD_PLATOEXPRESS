@@ -62,6 +62,8 @@
   .alert-card .a-text{ font-size:.85rem; color:var(--text-muted); line-height:1.5; }
 
   .kpi-grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:1.25rem; margin-bottom:1.25rem; }
+  .kpi-section-label{ grid-column:1/-1; font-size:.76rem; font-weight:800; text-transform:uppercase; letter-spacing:.05em; color:var(--text-muted); margin-top:.5rem; }
+  .kpi-section-label:first-child{ margin-top:0; }
   .kpi-card{ background:var(--surface); padding:1.3rem 1.4rem; border-radius:12px; box-shadow:var(--shadow); position:relative; overflow:hidden; border:1px solid var(--border); }
   .kpi-card::before{ content:''; position:absolute; top:0; left:0; width:4px; height:100%; background:var(--card-color,var(--info)); }
   .kpi-label{ font-size:.74rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em; font-weight:700; margin-bottom:.4rem; }
@@ -137,6 +139,7 @@
   <button class="tab-btn active" data-tab="resumen">📊 Resumen Ejecutivo</button>
   <button class="tab-btn" data-tab="leads">🧾 Detalle de Leads</button>
   <button class="tab-btn" data-tab="plaza">🗺️ Por plaza</button>
+  <button class="tab-btn" data-tab="searchterms">🔍 Términos de búsqueda</button>
 </div>
 
 <div id="loadingBox" class="loading"><div class="container"><div class="spinner"></div>Conectando con las fuentes de datos...</div></div>
@@ -203,6 +206,27 @@
             <th>CPL</th><th>CPA MQL</th><th>CPA SQL</th>
           </tr></thead>
           <tbody id="plazaTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div id="tab-searchterms" class="tab-content">
+    <div class="container">
+      <div id="searchTermsMessage" class="alert-banner" style="display:none;">
+        <div class="alert-card" style="--card-color:var(--warning); grid-column:1/-1;">
+          <div class="a-title">⚠️ Sólo disponible con Google Ads en vivo</div>
+          <div class="a-text">Los términos de búsqueda que activan tu pauta no existen en ningún Sheet — esta pestaña necesita que la API de Google Ads esté conectada y respondiendo. Revisa el badge de arriba.</div>
+        </div>
+      </div>
+      <div id="searchTermsTableWrap" class="table-card">
+        <table>
+          <thead><tr>
+            <th>Estado de palabras clave</th><th>Palabra clave</th><th>Impresiones</th><th>Interacciones</th>
+            <th>% Interacción</th><th>Costo promedio</th><th>Costo</th><th>% Conversión</th>
+            <th>Conversiones</th><th>Costo por conversión</th>
+          </tr></thead>
+          <tbody id="searchTermsBody"></tbody>
         </table>
       </div>
     </div>
@@ -337,9 +361,13 @@ async function fetchAdsPlazaRaw(sheetId, sheetName){
 }
 
 /* =========================================================================
-   Normalización de la respuesta futura de /api/google-ads-data (ver
-   assets/google-ads-data.js de la skill) a la misma forma que usamos para
-   el respaldo del Sheet, pero a nivel DIARIO en vez de mensual.
+   Normalización de la respuesta de /api/google-ads-data. A partir de este
+   cambio, Google Ads en vivo SOLO alimenta 3 cosas (decisión explícita del
+   cliente): Gasto, Conversiones y la pestaña de Términos de búsqueda. Todo
+   lo demás (MQL, Posible SQL, SQL, sus CPA, la tabla y gráficas mensuales,
+   "Detalle de Leads" y "Por plaza") sigue viniendo de los Google Sheets,
+   exactamente como antes de conectar la API — por eso ALL_ADS_SHEET se trae
+   siempre, en paralelo, sin importar si la API en vivo funciona o no.
    ========================================================================= */
 function normalizeLiveAdsData(apiData){
   const byDate = {};
@@ -351,25 +379,64 @@ function normalizeLiveAdsData(apiData){
     byDate[key].impressions += Number(r.Impressions)||0;
     byDate[key].clicks += Number(r.Clicks)||0;
   });
-  return Object.keys(byDate).map(key => ({ fecha: parseAnyDate(key), ...byDate[key] }));
+  const adsDaily = Object.keys(byDate).map(key => ({ fecha: parseAnyDate(key), ...byDate[key] }));
+  const searchTerms = (apiData.searchTermDaily || []).map(r => ({
+    fecha: parseAnyDate(r.Date),
+    searchTerm: r.SearchTerm || '(sin término)',
+    status: r.Status || '',
+    impressions: Number(r.Impressions)||0,
+    interactions: Number(r.Interactions)||0,
+    cost: Number(r.Cost)||0,
+    conversions: Number(r.Conversions)||0,
+  })).filter(r => r.fecha);
+  return { adsDaily, searchTerms };
 }
 
 let IS_ADS_LIVE = false;
-let ADS_GRANULARITY = 'month'; // 'day' una vez conectada la API en vivo
+let RAW_ADS_SHEET_ERROR = null;
+let ALL_ADS_LIVE = [];   // Gasto/Conversiones en vivo (o el mismo Sheet como respaldo si la API falla)
+let ALL_ADS_SHEET = [];  // SIEMPRE del Sheet — alimenta todo lo demás
+let ALL_SEARCH_TERMS = [];
+
 async function loadPaidMedia(){
+  const sheetPromise = fetchAdsResumenMensualRaw(SHEET_ID_ADS, TAB_ADS_RESUMEN)
+    .catch(err => { RAW_ADS_SHEET_ERROR = err.message; return []; });
+
+  let liveAdsDaily = null;
   try{
     const res = await fetch('/api/google-ads-data');
     if(!res.ok) throw new Error('API en vivo no disponible');
     const json = await res.json();
+    const normalized = normalizeLiveAdsData(json);
+    liveAdsDaily = normalized.adsDaily;
+    ALL_SEARCH_TERMS = normalized.searchTerms;
     IS_ADS_LIVE = true;
-    ADS_GRANULARITY = 'day';
-    return normalizeLiveAdsData(json);
   }catch(err){
     IS_ADS_LIVE = false;
-    ADS_GRANULARITY = 'month';
-    return await fetchAdsResumenMensualRaw(SHEET_ID_ADS, TAB_ADS_RESUMEN);
+    ALL_SEARCH_TERMS = [];
   }
+
+  const sheetAds = await sheetPromise;
+  ALL_ADS_SHEET = sheetAds;
+  ALL_ADS_LIVE = liveAdsDaily || sheetAds; // si la API falla, Gasto/Conversiones caen al Sheet también
 }
+
+/* Suma una métrica numérica dentro de un rango de fechas. granularity='day'
+   suma exacto (datos diarios reales); 'month' incluye el mes completo si se
+   traslapa con el rango (para datos que sólo existen a nivel mensual). */
+function sumMetricForRange(arr, range, granularity, field){
+  if(granularity === 'day'){
+    return arr.filter(a=>a.fecha>=range.start && a.fecha<=range.end).reduce((s,a)=>s+(a[field]||0),0);
+  }
+  return arr.filter(a=>{
+    const monthStart = a.fecha;
+    const monthEnd = new Date(monthStart.getFullYear(), monthStart.getMonth()+1, 0, 23,59,59,999);
+    return monthStart <= range.end && monthEnd >= range.start;
+  }).reduce((s,a)=>s+(a[field]||0),0);
+}
+function spendLiveForRange(range){ return sumMetricForRange(ALL_ADS_LIVE, range, IS_ADS_LIVE?'day':'month', 'spend'); }
+function conversionsLiveForRange(range){ return sumMetricForRange(ALL_ADS_LIVE, range, IS_ADS_LIVE?'day':'month', 'googleLeads'); }
+function spendSheetForRange(range){ return sumMetricForRange(ALL_ADS_SHEET, range, 'month', 'spend'); }
 
 let RAW_PLAZA_ERROR = null;
 async function loadPlazaData(){
@@ -452,7 +519,6 @@ function isPersonalEmail(email){
    ========================================================================= */
 let RAW = {};
 let ALL_LEADS = [];
-let ALL_ADS = [];
 let ALL_ADS_PLAZA = [];
 let filters = { preset:'all', customStart:null, customEnd:null, compare:false };
 
@@ -499,23 +565,11 @@ function isFineGrainedPreset(){ return ['today','yesterday','7','14','30'].inclu
 function renderMonthPresetButtons(){
   const keys = new Set();
   ALL_LEADS.forEach(l => keys.add(l.monthKey));
-  ALL_ADS.forEach(a => keys.add(monthKey(a.fecha)));
+  ALL_ADS_SHEET.forEach(a => keys.add(monthKey(a.fecha)));
   const sorted = Array.from(keys).sort();
   document.getElementById('monthPresets').innerHTML = sorted.map(k =>
     `<button class="preset-btn" data-preset="month:${k}">${monthLabel(k)}</button>`
   ).join('');
-}
-
-function spendForRange(range){
-  if(ADS_GRANULARITY === 'day'){
-    return ALL_ADS.filter(a=>a.fecha>=range.start && a.fecha<=range.end).reduce((s,a)=>s+a.spend,0);
-  }
-  // Granularidad mensual: se incluye el mes completo si se traslapa con el rango.
-  return ALL_ADS.filter(a=>{
-    const monthStart = a.fecha;
-    const monthEnd = new Date(monthStart.getFullYear(), monthStart.getMonth()+1, 0, 23,59,59,999);
-    return monthStart <= range.end && monthEnd >= range.start;
-  }).reduce((s,a)=>s+a.spend,0);
 }
 
 /* Gasto por plaza dentro de un rango. La pestaña "por plaza" es mensual
@@ -574,6 +628,7 @@ function processRawData(){
   ALL_LEADS = (RAW.leadsRows||[]).map(raw => {
     const n = normalizeRow(raw);
     const fecha = parseAnyDate(n['fecha']);
+    if(!fecha) return null; // fila sin fecha usable (ej. fila en blanco) -> se descarta más abajo, sin tronar el resto
     const empleados = Number(n['numero de empleados']) || 0;
     const turnos = Number(n['turnos']) || 0;
     const correo = (n['correo']||'').toString().trim();
@@ -603,14 +658,15 @@ function processRawData(){
       ciudad, plaza: plazaGroupFromCiudad(ciudad), status: (n['status']||'').toString().trim(),
       correo, isMQL, isSQL, isPosibleSQL, hasEmail: correo !== '', monthKey: monthKeyLead
     };
-  }).filter(l => l.fecha);
-
-  ALL_ADS = RAW.adsMonthly || [];
+  }).filter(l => l && l.fecha);
 }
 
+/* Tabla y gráficas mensuales: SIEMPRE con el Gasto del Sheet (ALL_ADS_SHEET),
+   no con la API en vivo — así lo pidió el cliente explícitamente ("todo lo
+   demás" sigue como estaba antes de conectar Google Ads). */
 function buildMonthlyTable(){
   const map = {};
-  ALL_ADS.forEach(a=>{
+  ALL_ADS_SHEET.forEach(a=>{
     const key = monthKey(a.fecha);
     if(!map[key]) map[key] = { key, spend:0, leads:0, mql:0, posibleSql:0, sql:0 };
     map[key].spend += a.spend;
@@ -644,15 +700,21 @@ function renderAlerts(leadsInRange){
   const cards = [];
   if(!IS_ADS_LIVE){
     cards.push(`<div class="alert-card" style="--card-color:var(--warning)">
-      <div class="a-title">⚠️ Paid media en modo respaldo</div>
-      <div class="a-text">Aún no está conectada la API de Google Ads. Se están usando los datos ya cargados en tu Sheet de reporte (a nivel mensual). Cuando tengas las credenciales, se conecta sin tocar el resto del dashboard.</div>
+      <div class="a-title">⚠️ Google Ads en vivo no disponible</div>
+      <div class="a-text">Las tarjetas de Gasto, Conversiones y CPA·Lead están usando el Sheet de reporte como respaldo (a nivel mensual), y la pestaña de Términos de búsqueda no tiene datos que mostrar hasta que la API en vivo vuelva a responder.</div>
     </div>`);
     if(isFineGrainedPreset()){
       cards.push(`<div class="alert-card" style="--card-color:var(--info)">
         <div class="a-title">ℹ️ Gasto aproximado por mes completo</div>
-        <div class="a-text">Mientras el gasto venga del Sheet (mensual), los filtros de día/semana muestran el gasto del mes completo que traslapa el período, no el monto exacto del rango. Esto se vuelve preciso al conectar la API en vivo.</div>
+        <div class="a-text">Mientras el Gasto en vivo venga del Sheet (mensual), los filtros de día/semana muestran el gasto del mes completo que traslapa el período, no el monto exacto del rango.</div>
       </div>`);
     }
+  }
+  if(RAW_ADS_SHEET_ERROR){
+    cards.push(`<div class="alert-card" style="--card-color:var(--danger)">
+      <div class="a-title">🔴 Error leyendo el Sheet de Google Ads</div>
+      <div class="a-text">${RAW_ADS_SHEET_ERROR} — esto afecta a MQL, Posible SQL, SQL y sus CPA, que siempre usan este Sheet.</div>
+    </div>`);
   }
   const noEmail = leadsInRange.filter(l=>!l.hasEmail).length;
   if(noEmail > 0){
@@ -679,28 +741,38 @@ function deltaHtml(curr, prev, invert){
   return `<div class="kpi-delta ${good?'up':'down'}">${arrow} ${Math.abs(pct).toFixed(1)}% vs período anterior</div>`;
 }
 
-function renderKpiGrid(kpis, prev){
-  const pctMql = kpis.leads>0 ? fmtPct(kpis.mql/kpis.leads*100) : '—';
-  const pctPosibleSql = kpis.leads>0 ? fmtPct(kpis.posibleSql/kpis.leads*100) : '—';
-  const pctSql = kpis.leads>0 ? fmtPct(kpis.sql/kpis.leads*100) : '—';
-  const cards = [
-    { label:'Gasto', value: fmtMXN(kpis.spend), color:'var(--info)', delta: prev?deltaHtml(kpis.spend, prev.spend, true):'' },
-    { label:'Leads (conversiones)', value: fmtInt(kpis.leads), color:'var(--accent)', delta: prev?deltaHtml(kpis.leads, prev.leads, false):'' },
-    { label:'MQL', value: fmtInt(kpis.mql), sub:`${pctMql} de los leads`, color:'var(--purple)', delta: prev?deltaHtml(kpis.mql, prev.mql, false):'' },
-    { label:'Posible SQL', value: fmtInt(kpis.posibleSql), sub:`${pctPosibleSql} de los leads`, color:'#c98a2e', delta: prev?deltaHtml(kpis.posibleSql, prev.posibleSql, false):'' },
-    { label:'SQL (leads de calidad)', value: fmtInt(kpis.sql), sub:`${pctSql} de los leads`, color:'var(--accent-2)', delta: prev?deltaHtml(kpis.sql, prev.sql, false):'' },
-    { label:'CPA · Lead', value: fmtCPA(kpis.spend, kpis.leads), color:'var(--warning)', delta:'' },
-    { label:'CPA · MQL', value: fmtCPA(kpis.spend, kpis.mql), color:'var(--warning)', delta:'' },
-    { label:'CPA · Posible SQL', value: fmtCPA(kpis.spend, kpis.posibleSql), color:'var(--warning)', delta:'' },
-    { label:'CPA · SQL', value: fmtCPA(kpis.spend, kpis.sql), color:'var(--warning)', delta:'' },
+function renderKpiGrid(current, prev){
+  const s = current.sheet;
+  const pctMql = s.leads>0 ? fmtPct(s.mql/s.leads*100) : '—';
+  const pctPosibleSql = s.leads>0 ? fmtPct(s.posibleSql/s.leads*100) : '—';
+  const pctSql = s.leads>0 ? fmtPct(s.sql/s.leads*100) : '—';
+
+  const liveCards = [
+    { label:'Gasto', value: fmtMXN(current.spendLive), color:'var(--info)', delta: prev?deltaHtml(current.spendLive, prev.spendLive, true):'' },
+    { label:'Conversiones', value: fmtInt(current.conversionsLive), color:'var(--accent)', delta: prev?deltaHtml(current.conversionsLive, prev.conversionsLive, false):'' },
+    { label:'CPA · Lead', value: fmtCPA(current.spendLive, current.conversionsLive), color:'var(--warning)', delta:'' },
   ];
-  document.getElementById('kpiGridMain').innerHTML = cards.map(c => `
+  const pipelineCards = [
+    { label:'Leads (pipeline)', value: fmtInt(s.leads), color:'var(--accent)', delta: prev?deltaHtml(s.leads, prev.sheet.leads, false):'' },
+    { label:'MQL', value: fmtInt(s.mql), sub:`${pctMql} de los leads`, color:'var(--purple)', delta: prev?deltaHtml(s.mql, prev.sheet.mql, false):'' },
+    { label:'Posible SQL', value: fmtInt(s.posibleSql), sub:`${pctPosibleSql} de los leads`, color:'#c98a2e', delta: prev?deltaHtml(s.posibleSql, prev.sheet.posibleSql, false):'' },
+    { label:'SQL (leads de calidad)', value: fmtInt(s.sql), sub:`${pctSql} de los leads`, color:'var(--accent-2)', delta: prev?deltaHtml(s.sql, prev.sheet.sql, false):'' },
+    { label:'CPA · MQL', value: fmtCPA(s.spend, s.mql), color:'var(--warning)', delta:'' },
+    { label:'CPA · Posible SQL', value: fmtCPA(s.spend, s.posibleSql), color:'var(--warning)', delta:'' },
+    { label:'CPA · SQL', value: fmtCPA(s.spend, s.sql), color:'var(--warning)', delta:'' },
+  ];
+  const renderCard = c => `
     <div class="kpi-card" style="--card-color:${c.color}">
       <div class="kpi-label">${c.label}</div>
       <div class="kpi-value">${c.value}</div>
       ${c.sub ? `<div class="kpi-sub">${c.sub}</div>` : ''}
       ${c.delta || ''}
-    </div>`).join('');
+    </div>`;
+  document.getElementById('kpiGridMain').innerHTML =
+    `<div class="kpi-section-label">🟢 Google Ads en vivo</div>` +
+    liveCards.map(renderCard).join('') +
+    `<div class="kpi-section-label">📋 Pipeline comercial (Google Sheets)</div>` +
+    pipelineCards.map(renderCard).join('');
 }
 
 function renderMainChart(monthly){
@@ -874,23 +946,73 @@ function renderPlazaTab(range, leadsInRange){
     </tr>`).join('') || `<tr><td colspan="10" style="text-align:center;color:var(--text-muted);padding:2rem;">Sin datos todavía.</td></tr>`;
 }
 
+/* Términos de búsqueda: SOLO existe con la API de Google Ads en vivo (no hay
+   equivalente en ningún Sheet). Los porcentajes/promedios se calculan aquí,
+   sobre los totales YA SUMADOS del período — nunca promediando los
+   porcentajes diarios que devolvería la API, porque eso sería matemáticamente
+   incorrecto (ej. el "costo promedio" de dos días con distinto tráfico no es
+   el promedio de sus dos costos promedio). */
+function renderSearchTermsTab(range){
+  const msgBox = document.getElementById('searchTermsMessage');
+  const tableWrap = document.getElementById('searchTermsTableWrap');
+  if(!IS_ADS_LIVE){
+    msgBox.style.display = 'block';
+    tableWrap.style.display = 'none';
+    return;
+  }
+  msgBox.style.display = 'none';
+  tableWrap.style.display = 'block';
+
+  const inRange = ALL_SEARCH_TERMS.filter(r => r.fecha >= range.start && r.fecha <= range.end);
+  const map = {};
+  inRange.forEach(r=>{
+    if(!map[r.searchTerm]) map[r.searchTerm] = { searchTerm:r.searchTerm, status:r.status, impressions:0, interactions:0, cost:0, conversions:0 };
+    const b = map[r.searchTerm];
+    b.impressions += r.impressions;
+    b.interactions += r.interactions;
+    b.cost += r.cost;
+    b.conversions += r.conversions;
+    b.status = r.status; // ALL_SEARCH_TERMS viene ordenado por fecha ascendente -> se queda con el status más reciente
+  });
+  const rows = Object.values(map).sort((a,b)=> b.cost - a.cost);
+
+  document.getElementById('searchTermsBody').innerHTML = rows.map(r => `
+    <tr>
+      <td>${r.status}</td>
+      <td>${r.searchTerm}</td>
+      <td>${fmtInt(r.impressions)}</td>
+      <td>${fmtInt(r.interactions)}</td>
+      <td>${r.impressions>0 ? fmtPct(r.interactions/r.impressions*100) : '—'}</td>
+      <td>${r.interactions>0 ? fmtMXN(r.cost/r.interactions) : '—'}</td>
+      <td>${fmtMXN(r.cost)}</td>
+      <td>${r.interactions>0 ? fmtPct(r.conversions/r.interactions*100) : '—'}</td>
+      <td>${fmtInt(r.conversions)}</td>
+      <td>${r.conversions>0 ? fmtMXN(r.cost/r.conversions) : '—'}</td>
+    </tr>`).join('') || `<tr><td colspan="10" style="text-align:center;color:var(--text-muted);padding:2rem;">Sin términos de búsqueda en este período.</td></tr>`;
+}
+
 function renderAll(){
   const range = resolveRange();
   const leadsInRange = filterByRange(ALL_LEADS, range);
-  const spend = spendForRange(range);
-  const kpis = computeKPIs(leadsInRange, spend);
+  const spendSheet = spendSheetForRange(range);
+  const spendLive = spendLiveForRange(range);
+  const conversionsLive = conversionsLiveForRange(range);
+  const sheetKpis = computeKPIs(leadsInRange, spendSheet);
 
-  let prevKpis = null;
+  let prev = null;
   if(filters.compare){
     const prevRange = previousRange(range);
     const prevLeads = filterByRange(ALL_LEADS, prevRange);
-    const prevSpend = spendForRange(prevRange);
-    prevKpis = computeKPIs(prevLeads, prevSpend);
+    prev = {
+      spendLive: spendLiveForRange(prevRange),
+      conversionsLive: conversionsLiveForRange(prevRange),
+      sheet: computeKPIs(prevLeads, spendSheetForRange(prevRange)),
+    };
   }
 
   updateStatusBadges();
   renderAlerts(leadsInRange);
-  renderKpiGrid(kpis, prevKpis);
+  renderKpiGrid({ spendLive, conversionsLive, sheet: sheetKpis }, prev);
 
   const monthly = buildMonthlyTable();
   renderMainChart(monthly);
@@ -898,6 +1020,7 @@ function renderAll(){
   renderMonthlyTable(monthly);
   renderLeadsTable(leadsInRange);
   renderPlazaTab(range, leadsInRange);
+  renderSearchTermsTab(range);
 }
 
 /* =========================================================================
@@ -905,14 +1028,13 @@ function renderAll(){
    ========================================================================= */
 async function init(){
   try{
-    const [leadsResult, adsData, plazaData] = await Promise.all([
+    const [leadsResult, , plazaData] = await Promise.all([
       fetchSheetTabSafe(SHEET_ID_LEADS, TAB_LEADS),
-      loadPaidMedia(),
+      loadPaidMedia(),     // deja listos ALL_ADS_LIVE, ALL_ADS_SHEET y ALL_SEARCH_TERMS
       loadPlazaData()
     ]);
     RAW.leadsRows = leadsResult.rows;
     RAW.leadsError = leadsResult.error;
-    RAW.adsMonthly = adsData;
     ALL_ADS_PLAZA = plazaData;
 
     processRawData();
